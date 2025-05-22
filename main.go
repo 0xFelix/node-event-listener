@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -51,7 +52,16 @@ func main() {
 
 	client := createK8SClient()
 
-	listen(ctx, handleEvent(ctx, client))
+	// Spawn goroutines to simulate listening for multiple nodes
+	wg := sync.WaitGroup{}
+	for range 10 {
+		wg.Add(1)
+		go func() {
+			listen(ctx, handleEvent(ctx, client))
+			wg.Done()
+		}()
+	}
+	wg.Wait()
 }
 
 func createK8SClient() *kubernetes.Clientset {

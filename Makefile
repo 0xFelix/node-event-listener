@@ -22,7 +22,7 @@ lint: ## Download golangci-lint if necessary and run it against the code.
 
 .PHONY: build
 build: ## Build the node-event-listener binary.
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -tags timetzdata -tags=nomsgpack -o $(LOCALBIN)/node-event-listener .
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -tags timetzdata -tags=nomsgpack -o $(LOCALBIN)/node-event-listener-goroutines .
 	#GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -o $(LOCALBIN)/node-event-listener .
 	#go build -o $(LOCALBIN)/node-event-listener .
 
