@@ -3,7 +3,6 @@ module github.com/0xfelix/node-event-listener
 go 1.24.0
 
 require (
-	github.com/stmcginnis/gofish v0.20.0
 	github.com/tmaxmax/go-sse v0.11.0
 	k8s.io/api v0.33.1
 	k8s.io/apimachinery v0.33.1

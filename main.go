@@ -15,7 +15,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/stmcginnis/gofish/redfish"
 	"github.com/tmaxmax/go-sse"
 	k8sv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -107,7 +106,13 @@ func handleEvent(ctx context.Context) sse.EventCallback {
 	nodeName := lookupEnv(ENV_NODENAME)
 
 	return func(sseEv sse.Event) {
-		redfishEv := &redfish.Event{}
+		redfishEv := &struct {
+			Events []struct {
+				EventType string
+				Message   string
+				MessageID string
+			}
+		}{}
 		if err := json.Unmarshal([]byte(sseEv.Data), &redfishEv); err != nil {
 			log.Printf("failed to unmarshal into redfish event: %v", err)
 			return
