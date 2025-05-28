@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -48,14 +49,35 @@ func main() {
 		log.Printf("shutting down...")
 	}()
 
-	listen(ctx, handleEvent(ctx))
+	ready := &atomic.Bool{}
+	listenReadyz(ready)
+	listenSSE(ctx, ready, handleEvent(ctx))
 }
 
-func listen(ctx context.Context, cb sse.EventCallback) {
+func listenReadyz(ready *atomic.Bool) {
+	http.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+		if ready.Load() {
+			w.WriteHeader(http.StatusOK) // Set the HTTP status code to 200 OK
+		} else {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+	})
+	go func() {
+		server := &http.Server{
+			Addr:              "127.0.0.1:8888",
+			ReadHeaderTimeout: 3 * time.Second,
+		}
+		if err := server.ListenAndServe(); err != nil {
+			log.Fatalf("http server failed: %v", err)
+		}
+	}()
+}
+
+func listenSSE(ctx context.Context, ready *atomic.Bool, cb sse.EventCallback) {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, lookupEnv(ENV_REDFISH_URL), http.NoBody)
 	req.SetBasicAuth(lookupEnv(ENV_REDFISH_USER), lookupEnv(ENV_REDFISH_PASS))
 
-	conn := createSSEClient().NewConnection(req)
+	conn := createSSEClient(ready).NewConnection(req)
 	conn.SubscribeToAll(cb)
 
 	log.Println("streaming sse events...")
@@ -72,12 +94,22 @@ func lookupEnv(key string) string {
 	return val
 }
 
-func createSSEClient() *sse.Client {
+func createSSEClient(ready *atomic.Bool) *sse.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: lookupInsecure()} // #nosec G402
 	return &sse.Client{
 		HTTPClient: &http.Client{Transport: transport},
+		ResponseValidator: func(resp *http.Response) error {
+			err := sse.DefaultValidator(resp)
+			if err != nil {
+				ready.Store(false)
+			} else {
+				ready.Store(true)
+			}
+			return err
+		},
 		OnRetry: func(err error, _ time.Duration) {
+			ready.Store(false)
 			log.Printf("lost connection: %v", err)
 			log.Printf("reconnecting...")
 		},
