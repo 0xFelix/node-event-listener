@@ -39,16 +39,12 @@ const (
 
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		select {
-		case <-sigChan:
-			cancel()
-		case <-ctx.Done():
-		}
+		<-sigChan
+		cancel()
 		log.Printf("shutting down...")
 	}()
 
@@ -59,8 +55,7 @@ func listen(ctx context.Context, cb sse.EventCallback) {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, lookupEnv(ENV_REDFISH_URL), http.NoBody)
 	req.SetBasicAuth(lookupEnv(ENV_REDFISH_USER), lookupEnv(ENV_REDFISH_PASS))
 
-	client := createSSEClient()
-	conn := client.NewConnection(req)
+	conn := createSSEClient().NewConnection(req)
 	conn.SubscribeToAll(cb)
 
 	log.Println("streaming sse events...")
