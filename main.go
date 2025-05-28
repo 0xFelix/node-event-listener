@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -117,6 +118,7 @@ func handleEvent(ctx context.Context) sse.EventCallback {
 			log.Printf("failed to unmarshal into redfish event: %v", err)
 			return
 		}
+
 		for _, ev := range redfishEv.Events {
 			log.Printf("%s: %s (%s)", ev.EventType, ev.Message, ev.MessageID)
 
@@ -185,41 +187,60 @@ func setNodeCondition(ctx context.Context, client rest.Interface, nodeName strin
 		LastTransitionTime: metav1.Now(),
 	}
 
-	patch := generatePatchPayload(cond, node.Status)
+	patch := generatePatchPayload(cond, node.Status.Conditions)
 	if len(patch) == 0 {
-		log.Printf("node condition was already set to: %s", cond.Status)
+		log.Printf("node condition %s was already set to %s", cond.Type, cond.Status)
 		return
 	}
 
-	err = client.Patch(types.StrategicMergePatchType).Resource("nodes").Name(nodeName).
+	err = client.Patch(types.JSONPatchType).Resource("nodes").Name(nodeName).
 		SubResource("status").Body(patch).Do(ctx).Error()
 	if err != nil {
 		log.Printf("failed to set node condition: %v", err)
 	}
 }
 
-func generatePatchPayload(newCond *k8sv1.NodeCondition, status k8sv1.NodeStatus) []byte {
-	found := false
-	for i, cond := range status.Conditions {
+func generatePatchPayload(newCond *k8sv1.NodeCondition, conditions []k8sv1.NodeCondition) []byte {
+	idx := -1
+	for i, cond := range conditions {
 		if cond.Type == newCond.Type {
 			if cond.Status == newCond.Status {
 				return nil
 			}
-			status.Conditions[i] = *newCond
-			found = true
+			idx = i
 			break
 		}
 	}
-	if !found {
-		status.Conditions = append(status.Conditions, *newCond)
+
+	const basePath = "/status/conditions"
+	var patches []map[string]any
+	if idx >= 0 {
+		path := fmt.Sprintf("%s/%d", basePath, idx)
+		patches = []map[string]any{
+			{
+				"op":    "test",
+				"path":  path,
+				"value": conditions[idx],
+			},
+			{
+				"op":    "replace",
+				"path":  path,
+				"value": newCond,
+			},
+		}
+	} else {
+		patches = []map[string]any{
+			{
+				"op":    "add",
+				"path":  basePath + "/-",
+				"value": newCond,
+			},
+		}
 	}
 
-	patchNode := &k8sv1.Node{
-		Status: status,
-	}
-	payload, err := json.Marshal(patchNode)
+	payload, err := json.Marshal(patches)
 	if err != nil {
-		log.Fatalf("Error marshaling patch: %v", err)
+		log.Fatalf("Error marshaling patches: %v", err)
 	}
 
 	return payload
