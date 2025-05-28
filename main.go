@@ -19,7 +19,10 @@ import (
 	"github.com/tmaxmax/go-sse"
 	k8sv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/serializer"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
@@ -49,21 +52,7 @@ func main() {
 		log.Printf("shutting down...")
 	}()
 
-	client := createK8SClient()
-
-	listen(ctx, handleEvent(ctx, client))
-}
-
-func createK8SClient() *kubernetes.Clientset {
-	config, err := clientcmd.BuildConfigFromFlags("", os.Getenv(ENV_KUBECONFIG))
-	if err != nil {
-		log.Fatalf("error building kubeconfig: %v", err)
-	}
-	client, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		log.Fatalf("error building kubernetes clientset: %v", err)
-	}
-	return client
+	listen(ctx, handleEvent(ctx))
 }
 
 func listen(ctx context.Context, cb sse.EventCallback) {
@@ -112,8 +101,9 @@ func lookupInsecure() bool {
 	return insecure
 }
 
-func handleEvent(ctx context.Context, client *kubernetes.Clientset) sse.EventCallback {
+func handleEvent(ctx context.Context) sse.EventCallback {
 	mIDs := getMessageIDs()
+	client := createNodeClient()
 	nodeName := lookupEnv(ENV_NODENAME)
 
 	return func(sseEv sse.Event) {
@@ -146,8 +136,36 @@ func getMessageIDs() []string {
 	}
 }
 
-func setNodeCondition(ctx context.Context, client *kubernetes.Clientset, nodeName string) {
-	node, err := client.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
+func createNodeClient() rest.Interface {
+	config, err := clientcmd.BuildConfigFromFlags("", os.Getenv(ENV_KUBECONFIG))
+	if err != nil {
+		log.Fatalf("error building kubeconfig: %v", err)
+	}
+	if err = setConfigDefaults(config); err != nil {
+		log.Fatalf("error setting config defaults: %v", err)
+	}
+	client, err := rest.RESTClientFor(config)
+	if err != nil {
+		log.Fatalf("error building kubernetes clientset: %v", err)
+	}
+	return client
+}
+
+func setConfigDefaults(config *rest.Config) error {
+	gv := k8sv1.SchemeGroupVersion
+	config.GroupVersion = &gv
+	config.APIPath = "/api"
+	scheme := runtime.NewScheme()
+	if err := k8sv1.AddToScheme(scheme); err != nil {
+		return err
+	}
+	config.NegotiatedSerializer = serializer.NewCodecFactory(scheme).WithoutConversion()
+	return rest.SetKubernetesDefaults(config)
+}
+
+func setNodeCondition(ctx context.Context, client rest.Interface, nodeName string) {
+	node := &k8sv1.Node{}
+	err := client.Get().Resource("nodes").Name(nodeName).Do(ctx).Into(node)
 	if err != nil {
 		log.Printf("failed to get node: %v", err)
 		return
@@ -168,7 +186,8 @@ func setNodeCondition(ctx context.Context, client *kubernetes.Clientset, nodeNam
 		return
 	}
 
-	_, err = client.CoreV1().Nodes().PatchStatus(ctx, nodeName, patch)
+	err = client.Patch(types.StrategicMergePatchType).Resource("nodes").Name(nodeName).
+		SubResource("status").Body(patch).Do(ctx).Error()
 	if err != nil {
 		log.Printf("failed to set node condition: %v", err)
 	}
